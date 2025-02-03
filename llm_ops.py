@@ -57,13 +57,33 @@ def validate_python_syntax(new_content: str) -> bool:
 
 def apply_llm_changes(original_content: str, new_content: str, file_path: str) -> None:
     """
-    Writes the new content to the file if valid. If Python, do a syntax check first.
+    Writes the new content to the file if valid. For files that are likely to be code,
+    it attempts to strip markdown formatting and only replace the dependency line.
     """
-    if file_path.endswith(".py"):
-        if not validate_python_syntax(new_content):
-            print(f"LLM suggested invalid Python syntax for {file_path}. Keeping original content.")
-            return
+    # If the output is wrapped in triple backticks, extract only the inner content.
+    if new_content.startswith("```") and new_content.endswith("```"):
+        new_content = new_content.strip("`").strip()
+    
+    # Optionally: use a regex to find the updated dependency line.
+    import re
+    # Assume the dependency line follows the pattern 'some-dependency==<version>'
+    pattern = r'(some-dependency==)[\d\.]+'
+    match = re.search(pattern, new_content)
+    if match:
+        updated_line = match.group(0)
+        # Now, replace the corresponding line in the original content.
+        def replace_line(match_obj):
+            return updated_line
+        new_file_content = re.sub(pattern, replace_line, original_content)
+    else:
+        # If no dependency line is found, default to replacing entire content.
+        new_file_content = new_content
+
+    # (Optional) Validate syntax if file is Python.
+    if file_path.endswith(".py") and not validate_python_syntax(new_file_content):
+        print(f"LLM suggested invalid Python syntax for {file_path}. Keeping original content.")
+        return
 
     with open(file_path, "w", encoding="utf-8") as f:
-        f.write(new_content)
+        f.write(new_file_content)
     print(f"Applied changes to {file_path}")
