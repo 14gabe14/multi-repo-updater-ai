@@ -3,6 +3,7 @@ import ast
 import time
 from typing import Tuple
 from openai import OpenAI  # Ensure you have the updated OpenAI SDK installed
+import logging
 
 # Global client; initially None.
 client = None
@@ -18,29 +19,44 @@ def set_openai_api_key(api_key: str):
 
 def get_llm_suggestion(file_content: str, user_prompt: str, max_retries: int = 3) -> str:
     """
-    Sends file content and user prompt to the LLM, returns the suggested modification.
+    Sends file content and user prompt to the LLM and returns the suggested modification.
+    Logs the input prompt and the raw LLM output for debugging.
     Includes basic retry logic.
     """
     if client is None:
         raise RuntimeError("OpenAI client is not initialized. Call set_openai_api_key() first.")
+        
     attempt = 0
     while attempt < max_retries:
         try:
+            # Construct the prompt message.
+            prompt_message = (
+                f"File content:\n```{file_content}```\n"
+                f"User instructions:\n{user_prompt}\n\n"
+                "Please provide updated file content without overwriting unrelated code."
+            )
+            logging.debug("LLM Prompt (attempt %d): %s", attempt + 1, prompt_message)
+            
             response = client.chat.completions.create(
                 model="gpt-3.5-turbo",
                 messages=[
                     {"role": "system", "content": "You are a coding assistant."},
-                    {"role": "user", "content": f"File content:\n```{file_content}```\nUser instructions:\n{user_prompt}\n\nPlease provide updated file content without overwriting unrelated code."}
+                    {"role": "user", "content": prompt_message}
                 ],
                 temperature=0.2
             )
-            # Extract the content from the LLM response
+            logging.debug("LLM Raw Response (attempt %d): %s", attempt + 1, response)
+            
             suggestion = response.choices[0].message.content
+            logging.debug("LLM Suggestion (attempt %d): %s", attempt + 1, suggestion)
+            
             return suggestion
         except Exception as e:
-            print(f"LLM API error on attempt {attempt+1}/{max_retries}: {e}")
+            logging.error("LLM API error on attempt %d: %s", attempt + 1, e)
             attempt += 1
             time.sleep(2)
+    return file_content
+
 
     # Fallback: if no successful response, return the original content
     return file_content
