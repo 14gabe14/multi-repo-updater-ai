@@ -1,0 +1,15 @@
+global:
+  default_branch: master
+  directory: "C:/Users/gabri/Documents/GitHub"
+repos:
+  - name: dummy_repo_0
+    url: "https://github.com/14gabe14/dummy_repo_0.git"  # Remote URL used to clone if the repo is not found locally.
+    # default_branch: develop                           # Repository-specific default branch.
+    tags: [core, backend]                             # Tags for filtering subsets.
+  - name: dummy_repo_1
+    url: "https://github.com/owner/dummy_repo_1.git"
+    # default_branch: develop
+    tags: [experimental]
+  - name: dummy_repo_2
+    directory: "C:/Users/gabri/Documents/GitHub/repos"       # Repo is not in the current workspace
+    tags: [core, frontend]
