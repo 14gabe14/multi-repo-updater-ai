@@ -1,3 +1,5 @@
+# llm_ops.py
+
 import os
 import ast
 import time
@@ -7,6 +9,18 @@ import logging
 
 # Global client; initially None.
 client = None
+
+# Ensure the logs directory exists
+log_dir = "logs"
+os.makedirs(log_dir, exist_ok=True)  # Creates the directory if it doesn’t exist
+
+# Set up a dedicated logger for LLM conversations
+llm_logger = logging.getLogger("llm_conversation")
+llm_logger.setLevel(logging.INFO)
+llm_handler = logging.FileHandler(os.path.join(log_dir, "llm_conversation.log"), mode="a", encoding="utf-8")
+llm_formatter = logging.Formatter("%(asctime)s - %(message)s")
+llm_handler.setFormatter(llm_formatter)
+llm_logger.addHandler(llm_handler)
 
 def set_openai_api_key(api_key: str):
     """
@@ -35,7 +49,8 @@ def get_llm_suggestion(file_content: str, user_prompt: str, max_retries: int = 3
                 f"User instructions:\n{user_prompt}\n\n"
                 "Please provide updated file content without overwriting unrelated code."
             )
-            logging.debug("LLM Prompt (attempt %d): %s", attempt + 1, prompt_message)
+            # Log the prompt message.
+            llm_logger.info("LLM Request (attempt %d): %s", attempt + 1, prompt_message)
             
             response = client.chat.completions.create(
                 model="gpt-3.5-turbo",
@@ -45,20 +60,20 @@ def get_llm_suggestion(file_content: str, user_prompt: str, max_retries: int = 3
                 ],
                 temperature=0.2
             )
-            logging.debug("LLM Raw Response (attempt %d): %s", attempt + 1, response)
             
             suggestion = response.choices[0].message.content
-            logging.debug("LLM Suggestion (attempt %d): %s", attempt + 1, suggestion)
+            # Log the LLM response.
+            llm_logger.info("LLM Response (attempt %d): %s", attempt + 1, suggestion)
             
             return suggestion
         except Exception as e:
-            logging.error("LLM API error on attempt %d: %s", attempt + 1, e)
+            llm_logger.error("LLM API error on attempt %d: %s", attempt + 1, e)
             attempt += 1
             time.sleep(2)
-    return file_content
 
+    # If no successful response, log and return original content.
+    llm_logger.warning("LLM did not return a successful response after %d attempts. Returning original content.", max_retries)
 
-    # Fallback: if no successful response, return the original content
     return file_content
 
 def validate_python_syntax(new_content: str) -> bool:
