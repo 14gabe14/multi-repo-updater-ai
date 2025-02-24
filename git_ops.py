@@ -1,14 +1,30 @@
+# git_ops.py
+
 import os
 import shutil
 from git import Repo, GitCommandError
 
 def clone_or_pull_repo(repo_url: str, base_dir: str = "repos") -> str:
-    # Use os.path.basename and os.path.normpath to handle Windows paths.
+    # If repo_url is an existing local directory, assume it is the desired repo.
+    if os.path.isdir(repo_url):
+        try:
+            repo = Repo(repo_url)
+            if "origin" in repo.remotes:
+                origin = repo.remotes["origin"]
+                origin.pull()
+                print(f"Pulled latest changes in: {repo_url}")
+            else:
+                print(f"No remote named 'origin' found in {repo_url}; skipping pull.")
+        except GitCommandError as e:
+            print(f"Error pulling {repo_url}: {e}")
+        return repo_url
+
+    # Otherwise, compute the destination path in the base_dir.
     repo_name = os.path.basename(os.path.normpath(repo_url))
     repo_path = os.path.join(base_dir, repo_name)
 
     if not os.path.exists(repo_path):
-        # If repo_url is a local path, copy it.
+        # If repo_url is a local path (but not in the expected location) copy it.
         if os.path.exists(repo_url):
             try:
                 shutil.copytree(repo_url, repo_path)
@@ -24,7 +40,6 @@ def clone_or_pull_repo(repo_url: str, base_dir: str = "repos") -> str:
     else:
         try:
             repo = Repo(repo_path)
-            # Check if there is a remote named "origin"
             if "origin" in repo.remotes:
                 origin = repo.remotes["origin"]
                 origin.pull()
@@ -33,7 +48,6 @@ def clone_or_pull_repo(repo_url: str, base_dir: str = "repos") -> str:
                 print(f"No remote named 'origin' found in {repo_path}; skipping pull.")
         except GitCommandError as e:
             print(f"Error pulling {repo_url}: {e}")
-
     return repo_path
 
 def create_branch(repo_path: str, branch_name: str):
