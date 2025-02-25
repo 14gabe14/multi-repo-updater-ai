@@ -49,7 +49,6 @@ def get_repo_path(repo_config, global_directory, sandbox_path=None):
 
 @cli.command("run")
 @click.option('--subset', default="", help="Comma-separated list of repo names or tags to process (if empty, use all repos).")
-@click.option('--repos', help="Override repo config with a comma-separated list of repository paths.")
 @click.option('--config-file', default="workspace-config.yaml", help="Path to YAML config file containing global and repos info.")
 @click.option('--files', required=True, help="Comma-separated list of file paths to edit relative to each repo.")
 @click.option('--prompt', required=True, help="Prompt instructions for the LLM.")
@@ -57,9 +56,8 @@ def get_repo_path(repo_config, global_directory, sandbox_path=None):
 @click.option('--pr-title', required=True, help="Title for the pull request.")
 @click.option('--pr-body', required=True, help="Body description for the pull request.")
 @click.option('--dry-run', is_flag=True, default=False, help="Run steps without pushing or creating PR.")
-@click.option('--repo-path', default="", help="Override a specific repository path. (Optional)")
 @click.option('--sandbox-path', default=None, help="Force all repositories to be treated as if they are in the specified sandbox directory.")
-def run(subset, repos, config_file, files, prompt, branch_name, pr_title, pr_body, dry_run, repo_path, sandbox_path):
+def run(subset, config_file, files, prompt, branch_name, pr_title, pr_body, dry_run, sandbox_path):
     """
     Run the multi-repo update workflow.
     """
@@ -67,25 +65,19 @@ def run(subset, repos, config_file, files, prompt, branch_name, pr_title, pr_bod
     global_conf = config.get("global", {})
     workspace_dir = global_conf.get("directory")
     repo_configs = config.get("repos", [])
-
-    if repo_path:
-        repo_list = [repo_path]
-    elif repos:
-        repo_list = [r.strip() for r in repos.split(',')]
+    
+    full_repo_list = [get_repo_path(rc, workspace_dir, sandbox_path) for rc in repo_configs]
+    if subset:
+        subset_filter = [s.strip() for s in subset.split(',')]
+        filtered_repos = []
+        for rc in repo_configs:
+            repo_name = rc.get("name")
+            repo_tags = rc.get("tags", [])
+            if repo_name in subset_filter or any(tag in subset_filter for tag in repo_tags):
+                filtered_repos.append(get_repo_path(rc, workspace_dir, sandbox_path))
+        repo_list = filtered_repos
     else:
-        # Build list of repository paths using get_repo_path and the sandbox override.
-        full_repo_list = [get_repo_path(rc, workspace_dir, sandbox_path) for rc in repo_configs]
-        if subset:
-            subset_filter = [s.strip() for s in subset.split(',')]
-            filtered_repos = []
-            for rc in repo_configs:
-                repo_name = rc.get("name")
-                repo_tags = rc.get("tags", [])
-                if repo_name in subset_filter or any(tag in subset_filter for tag in repo_tags):
-                    filtered_repos.append(get_repo_path(rc, workspace_dir, sandbox_path))
-            repo_list = filtered_repos
-        else:
-            repo_list = full_repo_list
+        repo_list = full_repo_list
 
     logging.debug(f"Using repositories: {repo_list}")
     logging.debug(f"Files to edit: {files}")
@@ -103,13 +95,11 @@ def run(subset, repos, config_file, files, prompt, branch_name, pr_title, pr_bod
 
 @cli.command("undo")
 @click.option('--subset', default="", help="Comma-separated list of repo names or tags to process (if empty, use all repos).")
-@click.option('--repos', help="Override repo config with a comma-separated list of repository paths.")
 @click.option('--config-file', default="workspace-config.yaml", help="Path to YAML config file containing global and repos info.")
 @click.option('--branch-name', required=True, help="Name of the branch to delete (undo changes).")
 @click.option('--restore-files', help="Comma-separated list of file paths to restore to HEAD (default branch).")
-@click.option('--repo-path', default="", help="Override a specific repository path. (Optional)")
 @click.option('--sandbox-path', default=None, help="Force all repositories to be treated as if they are in the specified sandbox directory.")
-def undo(subset, repos, config_file, branch_name, restore_files, repo_path, sandbox_path):
+def undo(subset, config_file, branch_name, restore_files, sandbox_path):
     """
     Undo the changes made by the tool by deleting the created branch and optionally restoring files.
     """
@@ -117,24 +107,19 @@ def undo(subset, repos, config_file, branch_name, restore_files, repo_path, sand
     global_conf = config.get("global", {})
     workspace_dir = global_conf.get("directory")
     repo_configs = config.get("repos", [])
-
-    if repo_path:
-        repo_list = [repo_path]
-    elif repos:
-        repo_list = [r.strip() for r in repos.split(',')]
+    
+    full_repo_list = [get_repo_path(rc, workspace_dir, sandbox_path) for rc in repo_configs]
+    if subset:
+        subset_filter = [s.strip() for s in subset.split(',')]
+        filtered_repos = []
+        for rc in repo_configs:
+            repo_name = rc.get("name")
+            repo_tags = rc.get("tags", [])
+            if repo_name in subset_filter or any(tag in subset_filter for tag in repo_tags):
+                filtered_repos.append(get_repo_path(rc, workspace_dir, sandbox_path))
+        repo_list = filtered_repos
     else:
-        full_repo_list = [get_repo_path(rc, workspace_dir, sandbox_path) for rc in repo_configs]
-        if subset:
-            subset_filter = [s.strip() for s in subset.split(',')]
-            filtered_repos = []
-            for rc in repo_configs:
-                repo_name = rc.get("name")
-                repo_tags = rc.get("tags", [])
-                if repo_name in subset_filter or any(tag in subset_filter for tag in repo_tags):
-                    filtered_repos.append(get_repo_path(rc, workspace_dir, sandbox_path))
-            repo_list = filtered_repos
-        else:
-            repo_list = full_repo_list
+        repo_list = full_repo_list
 
     restore_list = None
     if restore_files:
@@ -156,7 +141,7 @@ def prepare(config_file, target_path):
     global_conf = config.get("global", {})
     workspace_dir = global_conf.get("directory")
     repo_configs = config.get("repos", [])
-
+    
     os.makedirs(target_path, exist_ok=True)
     for rc in repo_configs:
         repo_name = rc.get("name")
@@ -188,13 +173,11 @@ def prepare(config_file, target_path):
 
 @cli.command("commit")
 @click.option('--subset', default="", help="Comma-separated list of repo names or tags to process (if empty, use all repos).")
-@click.option('--repos', help="Override repo config with a comma-separated list of repository paths.")
 @click.option('--config-file', default="workspace-config.yaml", help="Path to YAML config file containing global and repos info.")
 @click.option('--branch-name', required=True, help="Name of the branch where changes have been applied.")
 @click.option('--commit-message', required=True, help="Commit message for the bulk commit.")
-@click.option('--repo-path', default="", help="Override a specific repository path. (Optional)")
 @click.option('--sandbox-path', default=None, help="Force all repositories to be treated as if they are in the specified sandbox directory.")
-def commit(subset, repos, config_file, branch_name, commit_message, repo_path, sandbox_path):
+def commit(subset, config_file, branch_name, commit_message, sandbox_path):
     """
     Bulk commit changes in the specified repositories.
     """
@@ -203,24 +186,19 @@ def commit(subset, repos, config_file, branch_name, commit_message, repo_path, s
     workspace_dir = global_conf.get("directory")
     repo_configs = config.get("repos", [])
     
-    if repo_path:
-        repo_list = [repo_path]
-    elif repos:
-        repo_list = [r.strip() for r in repos.split(',')]
+    full_repo_list = [get_repo_path(rc, workspace_dir, sandbox_path) for rc in repo_configs]
+    if subset:
+        subset_filter = [s.strip() for s in subset.split(',')]
+        filtered_repos = []
+        for rc in repo_configs:
+            repo_name = rc.get("name")
+            repo_tags = rc.get("tags", [])
+            if repo_name in subset_filter or any(tag in subset_filter for tag in repo_tags):
+                filtered_repos.append(get_repo_path(rc, workspace_dir, sandbox_path))
+        repo_list = filtered_repos
     else:
-        full_repo_list = [get_repo_path(rc, workspace_dir, sandbox_path) for rc in repo_configs]
-        if subset:
-            subset_filter = [s.strip() for s in subset.split(',')]
-            filtered_repos = []
-            for rc in repo_configs:
-                repo_name = rc.get("name")
-                repo_tags = rc.get("tags", [])
-                if repo_name in subset_filter or any(tag in subset_filter for tag in repo_tags):
-                    filtered_repos.append(get_repo_path(rc, workspace_dir, sandbox_path))
-            repo_list = filtered_repos
-        else:
-            repo_list = full_repo_list
-
+        repo_list = full_repo_list
+    
     from git_ops import commit_changes
     for r in repo_list:
         try:
@@ -228,16 +206,13 @@ def commit(subset, repos, config_file, branch_name, commit_message, repo_path, s
         except Exception as e:
             click.echo(f"Failed to commit changes in {r}: {e}")
 
-
 @cli.command("push")
 @click.option('--subset', default="", help="Comma-separated list of repo names or tags to process (if empty, use all repos).")
-@click.option('--repos', help="Override repo config with a comma-separated list of repository paths.")
 @click.option('--config-file', default="workspace-config.yaml", help="Path to YAML config file containing global and repos info.")
 @click.option('--branch-name', required=True, help="Name of the branch to push.")
 @click.option('--remote-name', default="origin", help="Name of the remote to push to.")
-@click.option('--repo-path', default="", help="Override a specific repository path. (Optional)")
 @click.option('--sandbox-path', default=None, help="Force all repositories to be treated as if they are in the specified sandbox directory.")
-def push(subset, repos, config_file, branch_name, remote_name, repo_path, sandbox_path):
+def push(subset, config_file, branch_name, remote_name, sandbox_path):
     """
     Bulk push the committed changes in the specified repositories.
     """
@@ -246,24 +221,19 @@ def push(subset, repos, config_file, branch_name, remote_name, repo_path, sandbo
     workspace_dir = global_conf.get("directory")
     repo_configs = config.get("repos", [])
     
-    if repo_path:
-        repo_list = [repo_path]
-    elif repos:
-        repo_list = [r.strip() for r in repos.split(',')]
+    full_repo_list = [get_repo_path(rc, workspace_dir, sandbox_path) for rc in repo_configs]
+    if subset:
+        subset_filter = [s.strip() for s in subset.split(',')]
+        filtered_repos = []
+        for rc in repo_configs:
+            repo_name = rc.get("name")
+            repo_tags = rc.get("tags", [])
+            if repo_name in subset_filter or any(tag in subset_filter for tag in repo_tags):
+                filtered_repos.append(get_repo_path(rc, workspace_dir, sandbox_path))
+        repo_list = filtered_repos
     else:
-        full_repo_list = [get_repo_path(rc, workspace_dir, sandbox_path) for rc in repo_configs]
-        if subset:
-            subset_filter = [s.strip() for s in subset.split(',')]
-            filtered_repos = []
-            for rc in repo_configs:
-                repo_name = rc.get("name")
-                repo_tags = rc.get("tags", [])
-                if repo_name in subset_filter or any(tag in subset_filter for tag in repo_tags):
-                    filtered_repos.append(get_repo_path(rc, workspace_dir, sandbox_path))
-            repo_list = filtered_repos
-        else:
-            repo_list = full_repo_list
-
+        repo_list = full_repo_list
+    
     from git_ops import push_changes
     for r in repo_list:
         try:
@@ -273,14 +243,12 @@ def push(subset, repos, config_file, branch_name, remote_name, repo_path, sandbo
 
 @cli.command("pr")
 @click.option('--subset', default="", help="Comma-separated list of repo names or tags to process (if empty, use all repos).")
-@click.option('--repos', help="Override repo config with a comma-separated list of repository paths.")
 @click.option('--config-file', default="workspace-config.yaml", help="Path to YAML config file containing global and repos info.")
 @click.option('--branch-name', required=True, help="Name of the branch for which to open a PR.")
 @click.option('--pr-title', required=True, help="Title for the pull request.")
 @click.option('--pr-body', required=True, help="Body description for the pull request.")
-@click.option('--repo-path', default="", help="Override a specific repository path. (Optional)")
 @click.option('--sandbox-path', default=None, help="Force all repositories to be treated as if they are in the specified sandbox directory.")
-def pr(subset, repos, config_file, branch_name, pr_title, pr_body, repo_path, sandbox_path):
+def pr(subset, config_file, branch_name, pr_title, pr_body, sandbox_path):
     """
     Bulk open pull requests for the specified repositories.
     """
@@ -289,24 +257,19 @@ def pr(subset, repos, config_file, branch_name, pr_title, pr_body, repo_path, sa
     workspace_dir = global_conf.get("directory")
     repo_configs = config.get("repos", [])
     
-    if repo_path:
-        repo_list = [repo_path]
-    elif repos:
-        repo_list = [r.strip() for r in repos.split(',')]
+    full_repo_list = [get_repo_path(rc, workspace_dir, sandbox_path) for rc in repo_configs]
+    if subset:
+        subset_filter = [s.strip() for s in subset.split(',')]
+        filtered_repos = []
+        for rc in repo_configs:
+            repo_name = rc.get("name")
+            repo_tags = rc.get("tags", [])
+            if repo_name in subset_filter or any(tag in subset_filter for tag in repo_tags):
+                filtered_repos.append(get_repo_path(rc, workspace_dir, sandbox_path))
+        repo_list = filtered_repos
     else:
-        full_repo_list = [get_repo_path(rc, workspace_dir, sandbox_path) for rc in repo_configs]
-        if subset:
-            subset_filter = [s.strip() for s in subset.split(',')]
-            filtered_repos = []
-            for rc in repo_configs:
-                repo_name = rc.get("name")
-                repo_tags = rc.get("tags", [])
-                if repo_name in subset_filter or any(tag in subset_filter for tag in repo_tags):
-                    filtered_repos.append(get_repo_path(rc, workspace_dir, sandbox_path))
-            repo_list = filtered_repos
-        else:
-            repo_list = full_repo_list
-
+        repo_list = full_repo_list
+    
     from main import open_pull_request
     for r in repo_list:
         try:
