@@ -102,3 +102,15 @@ def commit_changes(repo_path: str, branch_name: str, commit_message: str):
             raise RuntimeError(f"Error committing changes in {repo_path}: {e}")
     else:
         print(f"No changes to commit in {repo_path}")
+
+
+def push_changes(repo_path: str, branch_name: str, remote_name: str = "origin"):
+    """
+    Pushes the specified branch to the remote.
+    """
+    repo = Repo(repo_path)
+    try:
+        repo.remotes[remote_name].push(refspec=f"{branch_name}:{branch_name}")
+        print(f"Pushed changes to {remote_name}/{branch_name} in {repo_path}")
+    except GitCommandError as e:
+        raise RuntimeError(f"Error pushing to {remote_name}/{branch_name} in {repo_path}: {e}")
