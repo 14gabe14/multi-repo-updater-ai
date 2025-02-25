@@ -271,5 +271,48 @@ def push(subset, repos, config_file, branch_name, remote_name, repo_path, sandbo
         except Exception as e:
             click.echo(f"Failed to push changes in {r}: {e}")
 
+@cli.command("pr")
+@click.option('--subset', default="", help="Comma-separated list of repo names or tags to process (if empty, use all repos).")
+@click.option('--repos', help="Override repo config with a comma-separated list of repository paths.")
+@click.option('--config-file', default="workspace-config.yaml", help="Path to YAML config file containing global and repos info.")
+@click.option('--branch-name', required=True, help="Name of the branch for which to open a PR.")
+@click.option('--pr-title', required=True, help="Title for the pull request.")
+@click.option('--pr-body', required=True, help="Body description for the pull request.")
+@click.option('--repo-path', default="", help="Override a specific repository path. (Optional)")
+@click.option('--sandbox-path', default=None, help="Force all repositories to be treated as if they are in the specified sandbox directory.")
+def pr(subset, repos, config_file, branch_name, pr_title, pr_body, repo_path, sandbox_path):
+    """
+    Bulk open pull requests for the specified repositories.
+    """
+    config = load_config(config_file)
+    global_conf = config.get("global", {})
+    workspace_dir = global_conf.get("directory")
+    repo_configs = config.get("repos", [])
+    
+    if repo_path:
+        repo_list = [repo_path]
+    elif repos:
+        repo_list = [r.strip() for r in repos.split(',')]
+    else:
+        full_repo_list = [get_repo_path(rc, workspace_dir, sandbox_path) for rc in repo_configs]
+        if subset:
+            subset_filter = [s.strip() for s in subset.split(',')]
+            filtered_repos = []
+            for rc in repo_configs:
+                repo_name = rc.get("name")
+                repo_tags = rc.get("tags", [])
+                if repo_name in subset_filter or any(tag in subset_filter for tag in repo_tags):
+                    filtered_repos.append(get_repo_path(rc, workspace_dir, sandbox_path))
+            repo_list = filtered_repos
+        else:
+            repo_list = full_repo_list
+
+    from main import open_pull_request
+    for r in repo_list:
+        try:
+            open_pull_request(r, branch_name, pr_title, pr_body)
+        except Exception as e:
+            click.echo(f"Failed to open PR for {r}: {e}")
+
 if __name__ == "__main__":
     cli()
