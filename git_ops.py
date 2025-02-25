@@ -87,3 +87,18 @@ def commit_and_push(repo_path: str, branch_name: str, commit_message: str, remot
         print(f"Pushed changes to {remote_name}/{branch_name}")
     except GitCommandError as e:
         raise RuntimeError(f"Error pushing to {remote_name}/{branch_name} in {repo_path}: {e}")
+    
+def commit_changes(repo_path: str, branch_name: str, commit_message: str):
+    """
+    Stages all changes and commits them with the given commit message.
+    """
+    repo = Repo(repo_path)
+    repo.git.add(all=True)
+    if repo.is_dirty():
+        try:
+            repo.index.commit(commit_message)
+            print(f"Committed changes in {repo_path}")
+        except GitCommandError as e:
+            raise RuntimeError(f"Error committing changes in {repo_path}: {e}")
+    else:
+        print(f"No changes to commit in {repo_path}")
