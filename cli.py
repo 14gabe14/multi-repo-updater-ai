@@ -159,8 +159,10 @@ def prepare(config_file, target_path):
             except Exception as e:
                 click.echo(f"Failed to copy {repo_name}: {e}")
         else:
-            # Repository not found locally, attempt to clone if URL is provided.
-            if "url" in rc and rc["url"]:
+            # Repository not found locally.
+            if os.path.exists(dest_path):
+                click.echo(f"Repository {repo_name} already exists in target; skipping clone.")
+            elif "url" in rc and rc["url"]:
                 url = rc["url"]
                 try:
                     from git import Repo
