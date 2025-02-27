@@ -1,3 +1,5 @@
+# main.py
+
 import os
 import sys
 import logging
@@ -5,7 +7,7 @@ import requests
 from rich.progress import track
 
 from git_ops import clone_or_pull_repo, create_branch, commit_and_push
-from llm_ops import set_openai_api_key, get_llm_suggestion, apply_llm_changes
+from llm_ops import set_openai_api_key, extract_snippets, transform_snippet, apply_llm_changes
 
 def run_workflow(
     repo_list,
@@ -17,7 +19,12 @@ def run_workflow(
     dry_run=False
 ):
     """
-    Orchestrates the multi-repo LLM-based code update workflow.
+    Orchestrates the multi-repo LLM-based code update workflow using a two-step LLM approach:
+    1. Extraction: Identify and extract relevant code snippets (with line numbers) from each file.
+    2. Transformation: For each snippet, generate a minimal patch.
+    
+    Patches are applied in reverse order (from the bottom of the file to the top)
+    to prevent shifting line numbers.
     """
     os.makedirs("logs", exist_ok=True)
     logging.basicConfig(
@@ -31,7 +38,6 @@ def run_workflow(
         logging.debug("Setting OpenAI API key from environment.")
         set_openai_api_key(os.environ["OPENAI_API_KEY"])
     else:
-        print("Warning: OPENAI_API_KEY not found in environment.")
         logging.warning("OPENAI_API_KEY not found in environment.")
 
     for repo_url in track(repo_list, description="Processing repositories..."):
@@ -51,8 +57,31 @@ def run_workflow(
                 with open(file_path, "r", encoding="utf-8") as f:
                     original_content = f.read()
 
-                new_content = get_llm_suggestion(original_content, llm_prompt)
-                apply_llm_changes(original_content, new_content, file_path)
+                # Extraction Phase: Extract relevant code snippets using LLM1.
+                snippets = extract_snippets(original_content, llm_prompt)
+                if not snippets:
+                    print(f"No relevant snippets found in {file_relative_path}.")
+                    continue
+
+                patches = []
+                # For each snippet, call LLM2 individually to generate a minimal patch.
+                for snippet in snippets:
+                    patch = transform_snippet(snippet, llm_prompt)
+                    patches.append(patch)
+
+                # Sort patches in reverse order by start_line to avoid line shifting issues.
+                patches.sort(key=lambda p: p["start_line"], reverse=True)
+                
+                # Apply each patch to the file content.
+                lines = original_content.splitlines()
+                for patch in patches:
+                    start = patch["start_line"] - 1  # Convert to 0-index
+                    end = patch["end_line"]
+                    new_lines = patch["new_code"].splitlines()
+                    lines = lines[:start] + new_lines + lines[end:]
+                updated_content = "\n".join(lines)
+
+                apply_llm_changes(original_content, updated_content, file_path)
 
             if not dry_run:
                 commit_and_push(repo_path, branch_name, f"{pr_title}")
@@ -97,64 +126,7 @@ def open_pull_request(repo_url, branch_name, pr_title, pr_body):
         else:
             print(f"Failed to open PR for {repo_name}: {response.text}")
             logging.error(f"Failed to open PR for {repo_name}: {response.text}")
-
     except Exception as e:
         print(f"Failed to parse or create PR for {repo_url}: {e}")
         logging.error(f"Failed to parse or create PR for {repo_url}: {e}")
 
-def undo_workflow(repo_list, branch_name, restore_files=None):
-    """
-    For each repository in repo_list, check out the default branch (try 'main', then 'master'),
-    optionally restore specified files, and then delete the branch specified by branch_name.
-    """
-    from git import Repo, GitCommandError
-    for repo_url in repo_list:
-        try:
-            # Assume repo_url is a local path.
-            repo_path = repo_url  
-            repo = Repo(repo_path)
-            # Determine the default branch.
-            default_branch = None
-            if "main" in repo.heads:
-                default_branch = repo.heads["main"]
-            elif "master" in repo.heads:
-                default_branch = repo.heads["master"]
-            else:
-                print(f"Default branch not found in {repo_path}. Cannot undo changes.")
-                continue
-
-            # Checkout default branch.
-            default_branch.checkout()
-
-            # If restore_files is provided, restore each file to HEAD.
-            if restore_files:
-                for file_rel in restore_files:
-                    try:
-                        # Use git checkout to restore the file from HEAD.
-                        repo.git.checkout("--", file_rel)
-                        print(f"Restored {file_rel} in {repo_path}")
-                    except Exception as e:
-                        print(f"Failed to restore {file_rel} in {repo_path}: {e}")
-
-            # Delete the update branch if it exists.
-            if branch_name in repo.heads:
-                repo.delete_head(branch_name, force=True)
-                print(f"Deleted branch '{branch_name}' in {repo_path}")
-            else:
-                print(f"Branch '{branch_name}' does not exist in {repo_path}; nothing to undo.")
-
-            # Optionally, delete the remote branch if desired.
-            if repo.remotes and "origin" in repo.remotes:
-                try:
-                    repo.remotes["origin"].push(refspec=f":{branch_name}")
-                    print(f"Deleted remote branch '{branch_name}' in {repo_path}")
-                except GitCommandError as e:
-                    print(f"Could not delete remote branch '{branch_name}' in {repo_path}: {e}")
-
-        except Exception as e:
-            print(f"Error undoing changes for {repo_url}: {e}")
-            
-if __name__ == "__main__":
-    # If run directly (without using the CLI group), you can call run_workflow with parameters.
-    # Otherwise, the CLI (cli.py) will handle command-line arguments.
-    pass
