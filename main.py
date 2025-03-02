@@ -1,13 +1,12 @@
 # main.py
 
 import os
-import sys
 import logging
 import requests
 from rich.progress import track
 
 from git_ops import clone_or_pull_repo, create_branch, commit_and_push
-from llm_ops import set_openai_api_key, extract_snippets, transform_snippet, apply_llm_changes
+from llm_ops import set_openai_api_key, process_chunk, apply_llm_changes, chunk_code_by_ast
 
 def run_workflow(
     repo_list,
@@ -19,12 +18,13 @@ def run_workflow(
     dry_run=False
 ):
     """
-    Orchestrates the multi-repo LLM-based code update workflow using a two-step LLM approach:
-    1. Extraction: Identify and extract relevant code snippets (with line numbers) from each file.
-    2. Transformation: For each snippet, generate a minimal patch.
+    Multi-repo workflow using a single LLM per AST chunk.
     
-    Patches are applied in reverse order (from the bottom of the file to the top)
-    to prevent shifting line numbers.
+    For each file:
+      1. Chunk the file using AST into logical segments.
+      2. For each chunk, ask the LLM to either return "false" or a new code snippet.
+      3. Replace only the chunks that require updates.
+      4. Apply patches in reverse order to preserve line numbers.
     """
     os.makedirs("logs", exist_ok=True)
     logging.basicConfig(
@@ -44,9 +44,8 @@ def run_workflow(
         try:
             logging.info(f"Processing repo: {repo_url}")
             repo_path = clone_or_pull_repo(repo_url)
-
             create_branch(repo_path, branch_name)
-
+            
             for file_relative_path in file_list:
                 file_path = os.path.join(repo_path, file_relative_path)
                 if not os.path.exists(file_path):
@@ -56,33 +55,45 @@ def run_workflow(
 
                 with open(file_path, "r", encoding="utf-8") as f:
                     original_content = f.read()
+                
+                # Chunk the file using AST-based chunking.
+                chunks = chunk_code_by_ast(original_content)
+                patches = []
+                print("Chunks:", chunks)
 
-                # Extraction Phase: Extract relevant code snippets using LLM1.
-                snippets = extract_snippets(original_content, llm_prompt)
-                if not snippets:
-                    print(f"No relevant snippets found in {file_relative_path}.")
+                # Process each chunk.
+                for chunk in chunks:
+                    updated_chunk = process_chunk(chunk, llm_prompt)
+                    if updated_chunk is not None:
+                        patches.append({
+                            "start_line": chunk["start_line"],
+                            "end_line": chunk["end_line"],
+                            "new_code": updated_chunk
+                        })
+                
+                if not patches:
+                    print(f"No changes required in {file_relative_path}.")
                     continue
 
-                patches = []
-                # For each snippet, call LLM2 individually to generate a minimal patch.
-                for snippet in snippets:
-                    patch = transform_snippet(snippet, llm_prompt)
-                    patches.append(patch)
+                print(f"Applying {len(patches)} patches to {file_relative_path}.")
+                print(f"Patch details: {patches}")
 
-                # Sort patches in reverse order by start_line to avoid line shifting issues.
+                # Sort patches in reverse order (bottom-to-top).
                 patches.sort(key=lambda p: p["start_line"], reverse=True)
-                
-                # Apply each patch to the file content.
                 lines = original_content.splitlines()
                 for patch in patches:
-                    start = patch["start_line"] - 1  # Convert to 0-index
+                    start = patch["start_line"] - 1  # 0-indexed
                     end = patch["end_line"]
                     new_lines = patch["new_code"].splitlines()
                     lines = lines[:start] + new_lines + lines[end:]
                 updated_content = "\n".join(lines)
 
-                apply_llm_changes(original_content, updated_content, file_path)
+                print("Original content:\n", original_content)
+                print("Updated content:\n", updated_content)
 
+
+                apply_llm_changes(original_content, updated_content, file_path)
+            
             if not dry_run:
                 commit_and_push(repo_path, branch_name, f"{pr_title}")
                 open_pull_request(repo_url, branch_name, pr_title, pr_body)
@@ -106,7 +117,6 @@ def open_pull_request(repo_url, branch_name, pr_title, pr_body):
             segment = repo_url.split(":")[1]
             segment = segment.rstrip(".git")
             owner, repo_name = segment.split("/")
-
         api_url = f"https://api.github.com/repos/{owner}/{repo_name}/pulls"
         headers = {
             "Authorization": f"token {token}",
@@ -118,7 +128,6 @@ def open_pull_request(repo_url, branch_name, pr_title, pr_body):
             "head": branch_name,
             "base": "main"
         }
-
         response = requests.post(api_url, json=data, headers=headers)
         if response.status_code == 201:
             print(f"Opened PR for {repo_name}: {response.json().get('html_url')}")
@@ -129,4 +138,3 @@ def open_pull_request(repo_url, branch_name, pr_title, pr_body):
     except Exception as e:
         print(f"Failed to parse or create PR for {repo_url}: {e}")
         logging.error(f"Failed to parse or create PR for {repo_url}: {e}")
-

@@ -3,7 +3,6 @@
 import os
 import ast
 import time
-import json
 from openai import OpenAI  # Ensure you have the updated OpenAI SDK installed
 import logging
 
@@ -30,119 +29,75 @@ def set_openai_api_key(api_key: str):
     client = OpenAI(api_key=api_key)
     os.environ["OPENAI_API_KEY"] = api_key
 
-def extract_snippets(file_content: str, user_prompt: str, extraction_model: str = "gpt-3.5-turbo", max_retries: int = 3) -> list:
-    """
-    Uses LLM1 to extract minimal code snippets that need to be updated.
-    The LLM is instructed to output JSON in the following format:
-    
-    {
-      "snippets": [
-         {"start_line": <number>, "end_line": <number>, "code": "<snippet code>"},
-         ...
-      ]
-    }
-    
-    If no changes are needed, it should return { "snippets": [] }.
-    """
-    if client is None:
-        raise RuntimeError("OpenAI client is not initialized. Call set_openai_api_key() first.")
-    
-    prompt_message = (
-        "You are an expert code analyzer. Given the file content and user instructions, "
-        "identify and extract only the minimal code snippets that need to be changed. "
-        "For each snippet, output its starting and ending line numbers and the exact code snippet. "
-        "Return your answer as valid JSON with the key 'snippets'.\n\n"
-        "Output format:\n"
-        '{ "snippets": [ { "start_line": 5, "end_line": 7, "code": "..." }, { "start_line": 1020, "end_line": 1022, "code": "..." } ] }\n\n'
-        "Do not output any extra text.\n\n"
-        "File content:\n"
-        "```"
-        f"{file_content}"
-        "```\n\n"
-        "User instructions:\n"
-        f"{user_prompt}\n\n"
-        "Extract only the parts that require updates."
-    )
-    
-    attempt = 0
-    while attempt < max_retries:
-        try:
-            llm_logger.info("Extraction Request (attempt %d): %s", attempt + 1, prompt_message)
-            response = client.chat.completions.create(
-                model=extraction_model,
-                messages=[
-                    {"role": "system", "content": "You are a code analysis assistant."},
-                    {"role": "user", "content": prompt_message}
-                ],
-                temperature=0.2
-            )
-            result_text = response.choices[0].message.content
-            llm_logger.info("Extraction Response (attempt %d): %s", attempt + 1, result_text)
-            snippets_data = json.loads(result_text)
-            return snippets_data.get("snippets", [])
-        except Exception as e:
-            llm_logger.error("Extraction LLM error on attempt %d: %s", attempt + 1, e)
-            attempt += 1
-            time.sleep(2)
-    llm_logger.warning("Extraction LLM did not return a successful response after %d attempts.", max_retries)
-    return []
-
-def transform_snippet(snippet: dict, user_instruction: str, transformation_model: str = "gpt-4", max_retries: int = 3) -> dict:
-    """
-    Uses LLM2 to generate a minimal patch for the provided snippet.
-    The LLM is instructed to output a JSON object with:
-    
-    {
-       "start_line": <number>,
-       "end_line": <number>,
-       "new_code": "<modified code snippet>"
-    }
-    """
-    if client is None:
-        raise RuntimeError("OpenAI client is not initialized. Call set_openai_api_key() first.")
-    
-    prompt_message = (
-        "You are a code transformation assistant. Given the following code snippet and a user instruction, "
-        "generate a minimal patch that updates only the necessary lines. Do not return the entire file; "
-        "output only the modified snippet.\n\n"
-        f"Snippet (lines {snippet['start_line']} to {snippet['end_line']}):\n"
-        "```"
-        f"{snippet['code']}"
-        "```\n\n"
-        "User instruction:\n"
-        f"{user_instruction}\n\n"
-        "Return your answer in valid JSON with the keys 'start_line', 'end_line', and 'new_code'."
-    )
-    
-    attempt = 0
-    while attempt < max_retries:
-        try:
-            llm_logger.info("Transformation Request (attempt %d): %s", attempt + 1, prompt_message)
-            response = client.chat.completions.create(
-                model=transformation_model,
-                messages=[
-                    {"role": "system", "content": "You are a code transformation assistant."},
-                    {"role": "user", "content": prompt_message}
-                ],
-                temperature=0.2
-            )
-            result_text = response.choices[0].message.content
-            llm_logger.info("Transformation Response (attempt %d): %s", attempt + 1, result_text)
-            patch_data = json.loads(result_text)
-            return patch_data
-        except Exception as e:
-            llm_logger.error("Transformation LLM error on attempt %d: %s", attempt + 1, e)
-            attempt += 1
-            time.sleep(2)
-    llm_logger.warning("Transformation LLM did not return a successful response after %d attempts. Returning original snippet.", max_retries)
-    return {"start_line": snippet["start_line"], "end_line": snippet["end_line"], "new_code": snippet["code"]}
-
 def validate_python_syntax(new_content: str) -> bool:
     try:
         ast.parse(new_content)
         return True
     except SyntaxError:
         return False
+
+def process_chunk(chunk: dict, user_instruction: str, model: str = "gpt-4o-mini", max_retries: int = 1) -> str:
+    """
+    Processes a code chunk with a single LLM call.
+    
+    The LLM is instructed:
+    "Given the following code chunk and user instruction, if this chunk requires changes,
+    output the updated code snippet enclosed in triple backticks (```).
+    If no changes are required, output exactly 'false'."
+    
+    Returns:
+      - The new code as a string (with backticks removed), if changes are required.
+      - None if the output is "false".
+    """
+    attempt = 0
+    while attempt < max_retries:
+        try:
+            prompt_message = (
+                "You are a code transformation assistant. "
+                "Given the following code chunk and a user instruction, "
+                "if this chunk requires changes, output the updated code snippet enclosed in triple backticks (```). "
+                "Do not include any extra text. "
+                "If no changes are required, output exactly 'false'.\n\n"
+                f"Code chunk (complete function or class block):\n"
+                "```python\n"
+                f"{chunk['code']}\n"
+                "```\n\n"
+                "User instruction:\n"
+                f"{user_instruction}\n\n"
+                "Output exactly as described."
+            )
+            logging.info("Process Chunk Request (attempt %d): %s", attempt + 1, prompt_message)
+            response = client.chat.completions.create(
+                model=model,
+                messages=[
+                    {"role": "system", "content": "You are a code transformation assistant."},
+                    {"role": "user", "content": prompt_message}
+                ],
+                temperature=0.2
+            )
+            result_text = response.choices[0].message.content.strip()
+            logging.info("Process Chunk Response (attempt %d): %s", attempt + 1, result_text)
+            
+            if result_text.lower() == "false":
+                return None
+            # Extract code from triple backticks.
+            if result_text.startswith("```") and result_text.endswith("```"):
+                lines = result_text.splitlines()
+                if lines[0].startswith("```"):
+                    lines = lines[1:]
+                if lines and lines[-1].strip() == "```":
+                    lines = lines[:-1]
+                updated_code = "\n".join(lines).strip()
+                return updated_code
+            else:
+                # If formatting is off, assume the entire result is the code.
+                return result_text
+        except Exception as e:
+            logging.error("Process Chunk LLM error on attempt %d: %s", attempt + 1, e)
+            attempt += 1
+            time.sleep(2)
+    logging.warning("Process Chunk LLM did not return a successful response after %d attempts.", max_retries)
+    return None
 
 def apply_llm_changes(original_content: str, new_content: str, file_path: str) -> None:
     """
@@ -154,3 +109,35 @@ def apply_llm_changes(original_content: str, new_content: str, file_path: str) -
     with open(file_path, "w", encoding="utf-8") as f:
         f.write(new_content)
     print(f"Applied changes to {file_path}")
+
+def chunk_code_by_ast(file_content: str) -> list:
+    """
+    Parse the file content using AST and return a list of code chunks.
+    Each chunk is a dict with:
+      - 'start_line': int,
+      - 'end_line': int,
+      - 'code': str (the source segment corresponding to a function or class)
+    If AST parsing fails, return the entire file as a single chunk.
+    """
+    chunks = []
+    try:
+        tree = ast.parse(file_content)
+        for node in ast.walk(tree):
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                segment = ast.get_source_segment(file_content, node)
+                if segment:
+                    start_line = node.lineno
+                    end_line = getattr(node, "end_lineno", start_line)
+                    chunks.append({
+                        "start_line": start_line,
+                        "end_line": end_line,
+                        "code": segment
+                    })
+    except Exception as e:
+        # Fallback: return entire file if AST parsing fails
+        chunks.append({
+            "start_line": 1,
+            "end_line": len(file_content.splitlines()),
+            "code": file_content
+        })
+    return chunks
